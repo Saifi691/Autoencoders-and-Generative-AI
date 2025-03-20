@@ -1,82 +1,71 @@
-# prompt: code for denoising autoencoder
-
+import tensorflow as tf
+from tensorflow.keras import layers, models
+from tensorflow.keras.datasets import cifar10
 import numpy as np
 import matplotlib.pyplot as plt
-import tensorflow as tf
-from tensorflow import keras
-from tensorflow.keras import layers, losses
-from tensorflow.keras.models import Model
-from keras.datasets import fashion_mnist
 
-# Load and preprocess the dataset
-(x_train, _), (x_test, _) = fashion_mnist.load_data()
-x_train = x_train.astype('float32') / 255.
-x_test = x_test.astype('float32') / 255.
-x_train = np.reshape(x_train, (len(x_train), 28, 28, 1))
-x_test = np.reshape(x_test, (len(x_test), 28, 28, 1))
+print("Num GPUs Available: ", len(tf.config.experimental.list_physical_devices('GPU')))
 
-# Add noise to the dataset
-noise_factor = 0.5
-x_train_noisy = x_train + noise_factor * np.random.normal(loc=0.0, scale=1.0, size=x_train.shape)
-x_test_noisy = x_test + noise_factor * np.random.normal(loc=0.0, scale=1.0, size=x_test.shape)
-x_train_noisy = np.clip(x_train_noisy, 0., 1.)
-x_test_noisy = np.clip(x_test_noisy, 0., 1.)
+(x_train, y_train), (x_test, y_test) = cifar10.load_data()
 
-# Create the denoising autoencoder model
-class DenoisingAutoencoder(Model):
-    def __init__(self, latent_dimensions):
-        super(DenoisingAutoencoder, self).__init__()
-        self.encoder = tf.keras.Sequential([
-            layers.Input(shape=(28, 28, 1)),
-            layers.Flatten(),
-            layers.Dense(latent_dimensions, activation='relu'),
-        ])
+x_train, x_test = x_train / 255.0, x_test / 255.0
 
-        self.decoder = tf.keras.Sequential([
-            layers.Dense(28 * 28, activation='sigmoid'),
-            layers.Reshape((28, 28, 1))
-        ])
+def add_noise(imgs, noise_factor=0.3):
+    noisy_imgs = imgs + noise_factor * np.random.randn(*imgs.shape)
+    noisy_imgs = np.clip(noisy_imgs, 0., 1.)
+    return noisy_imgs
 
-    def call(self, input_data):
-        encoded = self.encoder(input_data)
-        decoded = self.decoder(encoded)
-        return decoded
+x_train_noisy = add_noise(x_train)
+x_test_noisy = add_noise(x_test)
 
-latent_dimensions = 64
-autoencoder = DenoisingAutoencoder(latent_dimensions)
-autoencoder.compile(optimizer='adam', loss=losses.MeanSquaredError())
+def build_denoising_autoencoder(input_shape=(32, 32, 3)):
+    model = models.Sequential()
 
-# Train the autoencoder
-autoencoder.fit(x_train_noisy, x_train,
-                epochs=10,
-                batch_size=256,
-                shuffle=True,
-                validation_data=(x_test_noisy, x_test))
+    model.add(layers.InputLayer(input_shape=input_shape))
+    model.add(layers.Conv2D(32, (3, 3), activation='relu', padding='same'))
+    model.add(layers.MaxPooling2D((2, 2), padding='same'))
+    model.add(layers.Conv2D(64, (3, 3), activation='relu', padding='same'))
+    model.add(layers.MaxPooling2D((2, 2), padding='same'))
 
-# Encode and decode test data
-encoded_imgs = autoencoder.encoder(x_test_noisy).numpy()
-decoded_imgs = autoencoder.decoder(encoded_imgs).numpy()
+    model.add(layers.Conv2D(64, (3, 3), activation='relu', padding='same'))
+    model.add(layers.UpSampling2D((2, 2)))
+    model.add(layers.Conv2D(32, (3, 3), activation='relu', padding='same'))
+    model.add(layers.UpSampling2D((2, 2)))
+    model.add(layers.Conv2D(3, (3, 3), activation='sigmoid', padding='same'))
 
-# Display original, noisy, and reconstructed images
-n = 8
-plt.figure(figsize=(12, 6))
+    return model
+
+
+autoencoder = build_denoising_autoencoder()
+
+autoencoder.compile(optimizer='adam', loss='mse')
+
+autoencoder.fit(x_train_noisy, x_train, epochs=10, batch_size=64, validation_data=(x_test_noisy, x_test))
+
+
+decoded_imgs = autoencoder.predict(x_test_noisy)
+
+n = 10
+plt.figure(figsize=(20, 4))
 for i in range(n):
+    # Original images
     ax = plt.subplot(3, n, i + 1)
-    plt.imshow(x_test[i].reshape(28, 28), cmap='gray')
-    plt.title("Original")
-    plt.axis('off')
+    plt.imshow(x_test[i])
+    ax.get_xaxis().set_visible(False)
+    ax.get_yaxis().set_visible(False)
 
+    # Noisy images
     ax = plt.subplot(3, n, i + 1 + n)
-    plt.imshow(x_test_noisy[i].reshape(28, 28), cmap='gray')
-    plt.title("Noisy")
-    plt.axis('off')
+    plt.imshow(x_test_noisy[i])
+    ax.get_xaxis().set_visible(False)
+    ax.get_yaxis().set_visible(False)
 
+    # Denoised images
     ax = plt.subplot(3, n, i + 1 + 2 * n)
-    plt.imshow(decoded_imgs[i].reshape(28, 28), cmap='gray')
-    plt.title("Reconstructed")
-    plt.axis('off')
+    plt.imshow(decoded_imgs[i])
+    ax.get_xaxis().set_visible(False)
+    ax.get_yaxis().set_visible(False)
 
 plt.show()
-
-mse=np.mean(np.square(x_test- decoded_imgs))
-print(f" Manual Reconstruction loss : {mse}")
+mse = np.mean(np.square(x_test - decoded_imgs))
+print(f"Manual Reconstruction Loss (MSE): {mse}")
