@@ -1,118 +1,122 @@
 import numpy as np
 import tensorflow as tf
-import keras
-from keras import layers
-class Sampling(layers.Layer):
-    """Uses (mean, log_var) to sample z, the vector encoding a digit."""
-
-    def call(self, inputs):
-        mean, log_var = inputs
-        batch = tf.shape(mean)[0]
-        dim = tf.shape(mean)[1]
-        epsilon = tf.random.normal(shape=(batch, dim))
-        return mean + tf.exp(0.5 * log_var) * epsilon
-latent_dim = 2
-
-encoder_inputs = keras.Input(shape=(28, 28, 1))
-x = layers.Conv2D(64, 3, activation="relu", strides=2, padding="same")(encoder_inputs)
-x = layers.Conv2D(128, 3, activation="relu", strides=2, padding="same")(x)
-x = layers.Flatten()(x)
-x = layers.Dense(16, activation="relu")(x)
-mean = layers.Dense(latent_dim, name="mean")(x)
-log_var = layers.Dense(latent_dim, name="log_var")(x)
-z = Sampling()([mean, log_var])
-encoder = keras.Model(encoder_inputs, [mean, log_var, z], name="encoder")
-encoder.summary()
-latent_inputs = keras.Input(shape=(latent_dim,))
-x = layers.Dense(7 * 7 * 64, activation="relu")(latent_inputs)
-x = layers.Reshape((7, 7, 64))(x)
-x = layers.Conv2DTranspose(128, 3, activation="relu", strides=2, padding="same")(x)
-x = layers.Conv2DTranspose(64, 3, activation="relu", strides=2, padding="same")(x)
-decoder_outputs = layers.Conv2DTranspose(1, 3, activation="sigmoid", padding="same")(x)
-decoder = keras.Model(latent_inputs, decoder_outputs, name="decoder")
-decoder.summary()
-class VAE(keras.Model):
-    def __init__(self, encoder, decoder, **kwargs):
-        super().__init__(**kwargs)
-        self.encoder = encoder
-        self.decoder = decoder
-        self.total_loss_tracker = keras.metrics.Mean(name="total_loss")
-        self.reconstruction_loss_tracker = keras.metrics.Mean(
-            name="reconstruction_loss"
-        )
-        self.kl_loss_tracker = keras.metrics.Mean(name="kl_loss")
-
-    @property
-    def metrics(self):
-        return [
-            self.total_loss_tracker,
-            self.reconstruction_loss_tracker,
-            self.kl_loss_tracker,
-        ]
-
-    def train_step(self, data):
-        with tf.GradientTape() as tape:
-            mean,log_var, z = self.encoder(data)
-            reconstruction = self.decoder(z)
-            reconstruction_loss = tf.reduce_mean(
-                tf.reduce_sum(
-                    keras.losses.binary_crossentropy(data, reconstruction),
-                    axis=(1, 2),
-                )
-            )
-            kl_loss = -0.5 * (1 + log_var - tf.square(mean) - tf.exp(log_var))
-            kl_loss = tf.reduce_mean(tf.reduce_sum(kl_loss, axis=1))
-            total_loss = reconstruction_loss + kl_loss
-        grads = tape.gradient(total_loss, self.trainable_weights)
-        self.optimizer.apply_gradients(zip(grads, self.trainable_weights))
-        self.total_loss_tracker.update_state(total_loss)
-        self.reconstruction_loss_tracker.update_state(reconstruction_loss)
-        self.kl_loss_tracker.update_state(kl_loss)
-        return {
-            "loss": self.total_loss_tracker.result(),
-            "reconstruction_loss": self.reconstruction_loss_tracker.result(),
-            "kl_loss": self.kl_loss_tracker.result(),
-        }
-(x_train, _), (x_test, _) = keras.datasets.fashion_mnist.load_data()
-fashion_mnist = np.concatenate([x_train, x_test], axis=0)
-fashion_mnist = np.expand_dims(fashion_mnist, -1).astype("float32") / 255
-
-vae = VAE(encoder, decoder)
-vae.compile(optimizer=keras.optimizers.Adam())
-vae.fit(fashion_mnist, epochs=10, batch_size=128)
+from tensorflow.keras import layers, models
 import matplotlib.pyplot as plt
+from tensorflow.keras.datasets import cifar10
 
-def plot_latent_space(vae, n=10, figsize=5):
+# Load CIFAR-10 and normalize
+(x_train, _), (x_test, _) = cifar10.load_data()
+x_train, x_test = x_train.astype('float32') / 255.0, x_test.astype('float32') / 255.0
 
-    img_size = 28
-    scale = 0.5
-    figure = np.zeros((img_size * n, img_size * n))
+# Add noise
+def add_noise(x, noise_factor=0.3):
+    return np.clip(x + noise_factor * np.random.normal(size=x.shape), 0., 1.)
 
-    grid_x = np.linspace(-scale, scale, n)
-    grid_y = np.linspace(-scale, scale, n)[::-1]
+x_train_noisy, x_test_noisy = add_noise(x_train), add_noise(x_test)
 
-    for i, yi in enumerate(grid_y):
-        for j, xi in enumerate(grid_x):
-            sample = np.array([[xi, yi]])
-            x_decoded = vae.decoder.predict(sample, verbose=0)
-            images = x_decoded[0].reshape(img_size, img_size)
-            figure[
-                i * img_size : (i + 1) * img_size,
-                j * img_size : (j + 1) * img_size,
-            ] = images
+# Denoising Autoencoder Model
+def build_dae():
+    input_img = layers.Input(shape=(32, 32, 3))
+    x = layers.Conv2D(32, (3, 3), activation='relu', padding='same')(input_img)
+    x = layers.MaxPooling2D((2, 2), padding='same')(x)
+    x = layers.Conv2D(64, (3, 3), activation='relu', padding='same')(x)
+    encoded = layers.MaxPooling2D((2, 2), padding='same')(x)
 
-    plt.figure(figsize=(figsize, figsize))
-    start_range = img_size // 2
-    end_range = n * img_size + start_rangea3
-    pixel_range = np.arange(start_range, end_range, img_size)
-    sample_range_x = np.round(grid_x, 1)
-    sample_range_y = np.round(grid_y, 1)
-    plt.xticks(pixel_range, sample_range_x)
-    plt.yticks(pixel_range, sample_range_y)
-    plt.xlabel("z[0]")
-    plt.ylabel("z[1]")
-    plt.imshow(figure, cmap="Greys_r")
+    x = layers.Conv2D(64, (3, 3), activation='relu', padding='same')(encoded)
+    x = layers.UpSampling2D((2, 2))(x)
+    x = layers.Conv2D(32, (3, 3), activation='relu', padding='same')(x)
+    x = layers.UpSampling2D((2, 2))(x)
+    decoded = layers.Conv2D(3, (3, 3), activation='sigmoid', padding='same')(x)
+
+    autoencoder = models.Model(input_img, decoded)
+    autoencoder.compile(optimizer='adam', loss='mse')
+    return autoencoder
+
+# Train Denoising Autoencoder
+dae = build_dae()
+dae.fit(x_train_noisy, x_train, epochs=10, batch_size=128, validation_data=(x_test_noisy, x_test))
+
+# VAE Model
+class VAE(tf.keras.Model):
+    def __init__(self, latent_dim):
+        super().__init__()
+        self.latent_dim = latent_dim
+        self.encoder = models.Sequential([
+            layers.Conv2D(32, (3, 3), activation='relu', padding='same'),
+            layers.MaxPooling2D((2, 2), padding='same'),
+            layers.Conv2D(64, (3, 3), activation='relu', padding='same'),
+            layers.MaxPooling2D((2, 2), padding='same'),
+            layers.Flatten(),
+            layers.Dense(latent_dim + latent_dim)
+        ])
+        self.decoder = models.Sequential([
+            layers.Dense(8 * 8 * 64, activation='relu', input_dim=latent_dim),
+            layers.Reshape((8, 8, 64)),
+            layers.Conv2DTranspose(64, (3, 3), activation='relu', padding='same'),
+            layers.UpSampling2D((2, 2)),
+            layers.Conv2DTranspose(32, (3, 3), activation='relu', padding='same'),
+            layers.UpSampling2D((2, 2)),
+            layers.Conv2D(3, (3, 3), activation='sigmoid', padding='same')
+        ])
+
+    def call(self, x):
+        z = self.encoder(x)
+        mu, log_var = z[:, :self.latent_dim], z[:, self.latent_dim:]
+        z = mu + tf.exp(0.5 * log_var) * tf.random.normal(tf.shape(mu))
+        return self.decoder(z), mu, log_var
+
+# VAE Loss Function
+def vae_loss(x, x_decoded_mean, mu, log_var):
+    reconstruction_loss = tf.reduce_mean(tf.reduce_sum(tf.keras.losses.binary_crossentropy(x, x_decoded_mean), axis=(1, 2)))
+    kl_loss = -0.5 * tf.reduce_mean(tf.reduce_sum(1 + log_var - tf.square(mu) - tf.exp(log_var), axis=1))
+    return reconstruction_loss + kl_loss
+
+# Custom training loop for VAE (as it's easier to handle multiple outputs)
+vae = VAE(latent_dim=64)
+
+@tf.function
+def compute_loss(model, x):
+    # Forward pass
+    decoded, mu, log_var = model(x)
+    # Compute the loss
+    loss = vae_loss(x, decoded, mu, log_var)
+    return loss
+
+# Train VAE
+optimizer = tf.keras.optimizers.Adam()
+for epoch in range(10):
+    for batch in range(0, len(x_train), 128):
+        x_batch = x_train[batch:batch+128]
+
+        with tf.GradientTape() as tape:
+            loss = compute_loss(vae, x_batch)
+
+        grads = tape.gradient(loss, vae.trainable_variables)
+        optimizer.apply_gradients(zip(grads, vae.trainable_variables))
+
+    print(f"Epoch {epoch + 1}, Loss: {loss.numpy()}")
+
+# Visualize Denoising Autoencoder results
+def plot_images(noisy, reconstructed, original, idx=0):
+    plt.figure(figsize=(12, 4))
+    plt.subplot(1, 3, 1), plt.imshow(noisy[idx]), plt.title("Noisy Image")
+    plt.subplot(1, 3, 2), plt.imshow(reconstructed[idx]), plt.title("Reconstructed")
+    plt.subplot(1, 3, 3), plt.imshow(original[idx]), plt.title("Original")
     plt.show()
 
+# Reconstructed images from Denoising Autoencoder
+reconstructed_images = dae.predict(x_test_noisy)
+plot_images(x_test_noisy, reconstructed_images, x_test)
 
-plot_latent_space(vae)
+# Generate and visualize new images from VAE
+def generate_images(vae, num_images=10):
+    random_latent_vectors = tf.random.normal(shape=(num_images, 64))
+    return vae.decoder(random_latent_vectors).numpy()
+
+generated_images = generate_images(vae)
+plt.figure(figsize=(12, 12))
+for i in range(10):
+    plt.subplot(1, 10, i + 1)
+    plt.imshow(generated_images[i])
+    plt.axis('off')
+plt.show()
