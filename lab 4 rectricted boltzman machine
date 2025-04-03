@@ -1,0 +1,99 @@
+# prompt: Train a restricted boltzman machine on any dataset.
+# Extract meaningful features from input data.
+# Use extracted features for classification.
+
+import numpy as np
+import tensorflow as tf
+from tensorflow import keras
+from tensorflow.keras import layers
+from sklearn.model_selection import train_test_split
+from sklearn.linear_model import LogisticRegression
+
+# Assuming you have your data in 'data' and labels in 'labels'
+# Replace this with your actual data loading
+# Example using MNIST for demonstration purposes:
+(x_train, y_train), (x_test, y_test) = keras.datasets.mnist.load_data()
+x_train = x_train.astype("float32") / 255.0
+x_test = x_test.astype("float32") / 255.0
+x_train = x_train.reshape((len(x_train), np.prod(x_train.shape[1:])))
+x_test = x_test.reshape((len(x_test), np.prod(x_test.shape[1:])))
+
+# Split data into training and validation sets
+x_train, x_val, y_train, y_val = train_test_split(
+    x_train, y_train, test_size=0.2, random_state=42
+)
+
+
+# Define the RBM
+class RBM:
+    def __init__(self, visible_size, hidden_size):
+        self.visible_size = visible_size
+        self.hidden_size = hidden_size
+        self.weights = tf.Variable(
+            tf.random.normal([visible_size, hidden_size], stddev=0.1), name="weights"
+        )
+        self.visible_bias = tf.Variable(tf.zeros([visible_size]), name="visible_bias")
+        self.hidden_bias = tf.Variable(tf.zeros([hidden_size]), name="hidden_bias")
+
+    def sample_hidden(self, visible_probabilities):
+        hidden_activations = tf.matmul(
+            visible_probabilities, self.weights
+        ) + self.hidden_bias
+        hidden_probabilities = tf.sigmoid(hidden_activations)
+        return hidden_probabilities, tf.cast(
+            tf.random.uniform(tf.shape(hidden_probabilities)) < hidden_probabilities,
+            tf.float32,
+        )
+
+    def sample_visible(self, hidden_probabilities):
+        visible_activations = tf.matmul(
+            hidden_probabilities, self.weights, transpose_b=True
+        ) + self.visible_bias
+        visible_probabilities = tf.sigmoid(visible_activations)
+        return visible_probabilities, tf.cast(
+            tf.random.uniform(tf.shape(visible_probabilities)) < visible_probabilities,
+            tf.float32,
+        )
+
+    def train(self, visible_data, learning_rate, epochs):
+        for epoch in range(epochs):
+            positive_hidden_probabilities, positive_hidden_samples = self.sample_hidden(visible_data)
+            negative_visible_probabilities, negative_visible_samples = self.sample_visible(positive_hidden_probabilities)
+            negative_hidden_probabilities, negative_hidden_samples = self.sample_hidden(negative_visible_probabilities)
+
+            # Update weights, visible bias, and hidden bias
+            weight_update = (
+                tf.matmul(visible_data, positive_hidden_probabilities, transpose_a=True)
+                - tf.matmul(negative_visible_probabilities, negative_hidden_probabilities, transpose_a=True)
+            ) / tf.cast(tf.shape(visible_data)[0], tf.float32)
+            visible_bias_update = tf.reduce_mean(visible_data - negative_visible_probabilities, axis=0)
+            hidden_bias_update = tf.reduce_mean(positive_hidden_probabilities - negative_hidden_probabilities, axis=0)
+
+            self.weights.assign_add(learning_rate * weight_update)
+            self.visible_bias.assign_add(learning_rate * visible_bias_update)
+            self.hidden_bias.assign_add(learning_rate * hidden_bias_update)
+
+            print(f"Epoch {epoch+1}/{epochs} completed.")
+
+# Initialize and train the RBM
+visible_size = x_train.shape[1]
+hidden_size = 128  # Number of hidden units
+rbm = RBM(visible_size, hidden_size)
+
+rbm.train(tf.constant(x_train, dtype=tf.float32), learning_rate=0.01, epochs=5)
+
+# Extract features
+hidden_probs, _ = rbm.sample_hidden(tf.constant(x_train, dtype=tf.float32))
+hidden_features = hidden_probs.numpy()
+
+hidden_probs_val, _ = rbm.sample_hidden(tf.constant(x_val, dtype=tf.float32))
+hidden_features_val = hidden_probs_val.numpy()
+
+
+# Train a classifier (e.g., logistic regression) on the extracted features
+classifier = LogisticRegression()
+classifier.fit(hidden_features, y_train)
+
+# Evaluate the classifier
+accuracy = classifier.score(hidden_features_val, y_val)
+print(f"Classifier Accuracy: {accuracy}")
