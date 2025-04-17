@@ -1,0 +1,74 @@
+import numpy as np
+import tensorflow as tf
+from tensorflow.keras import layers, models
+from sklearn.datasets import fetch_openml
+from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import train_test_split
+from sklearn.neural_network import BernoulliRBM
+
+# Load and preprocess the MNIST dataset
+mnist = fetch_openml("mnist_784")
+
+# Features and labels
+X = mnist.data
+y = mnist.target.astype(int)
+
+# Standardize the dataset
+scaler = StandardScaler()
+X_scaled = scaler.fit_transform(X)
+
+# Split data into training and testing sets
+X_train, X_test, y_train, y_test = train_test_split(X_scaled, y, test_size=0.2, random_state=42)
+
+# Define the DBN class with pre-training (RBM) and fine-tuning (supervised)
+class DBN:
+    def __init__(self, layer_sizes):
+        self.layer_sizes = layer_sizes
+        self.rbms = []
+
+    def pretrain(self, X_train):
+        """
+        Train the DBN using stacked RBMs.
+        """
+        for size in self.layer_sizes:
+            rbm = BernoulliRBM(n_components=size, learning_rate=0.1, n_iter=10)
+            X_train = rbm.fit_transform(X_train)
+            self.rbms.append(rbm)
+
+    def fine_tune(self, X_train, y_train):
+        """
+        Fine-tune the pre-trained network using supervised learning.
+        """
+        # Build the DBN architecture (including a softmax classifier for output)
+        model = models.Sequential()
+        model.add(layers.InputLayer(input_shape=(X_train.shape[1],)))
+
+        for rbm in self.rbms:
+            model.add(layers.Dense(rbm.components_.shape[0], activation='relu'))
+
+        # Output layer with softmax activation
+        model.add(layers.Dense(10, activation='softmax'))
+
+        # Compile and train the model
+        model.compile(optimizer='adam', loss='sparse_categorical_crossentropy', metrics=['accuracy'])
+        model.fit(X_train, y_train, epochs=10, batch_size=32)
+        self.model = model
+
+    def predict(self, X_test):
+        """
+        Make predictions on the test data.
+        """
+        return self.model.predict(X_test)
+
+# Initialize the DBN with layer sizes for the RBMs (e.g., 500 and 300 units)
+dbn = DBN(layer_sizes=[500, 300])
+
+# Pretrain the DBN (unsupervised)
+dbn.pretrain(X_train)
+
+# Fine-tune the DBN (supervised)
+dbn.fine_tune(X_train, y_train)
+
+# Evaluate the model on test data
+test_loss, test_acc = dbn.model.evaluate(X_test, y_test)
+print(f'Test accuracy: {test_acc}')
